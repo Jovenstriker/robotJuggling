@@ -35,7 +35,7 @@ conda activate robotjuggling
 The torso is no longer fixed: it can move forward/back, up/down and pitch, and has to be balanced on the feet (it cannot fall sideways). It starts standing on the left leg with the right foot raised. The ball is launched with a random forward/backward speed (`ball_speed`, default 0.3 m/s), so the robot has to step or hop to stay under it. Walking is never rewarded directly; it only moves to keep juggling.
 
 - **Action** (6): hip/knee/ankle targets per leg. **Observation** (33): torso height, pitch, velocities, joints, ball relative to torso and each foot, foot velocities and pitch, foot-on-ground flags.
-- **Reward**: the juggling terms above, measured relative to the robot (ball should stay within 0.25 m of the spot in front of it), plus +0.2 per step for staying up and −0.5·|torso pitch|.
+- **Reward**: the juggling terms above, measured relative to the robot (ball should stay within 0.25 m of the spot in front of it), plus +0.2 per step for staying up and −0.5·|torso pitch|. To stop the "kick it sky-high and run under it" exploit (seen in `ppo_walk_v1`), the airborne bonus is only paid while the ball is below `max_bonus_height` (1.5 m), and an apex more than 0.3 m above `target_apex` costs `overshoot_penalty` (5) per metre.
 - **Termination**: ball dropped or more than 0.7 m beyond reach, or the robot falls (torso below 0.6 m or pitch > 0.8 rad).
 
 ## Usage

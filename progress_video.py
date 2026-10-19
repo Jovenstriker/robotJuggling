@@ -46,10 +46,11 @@ def main():
             obs, _, term, trunc, info = env.step(policy(obs))
             done = term or trunc
             t = env._steps / env.metadata["render_fps"]
+            moved = f"   moved: {info['distance']:+.1f}m" if "distance" in info else ""
             frames.append(label(env.render(),
-                                f"{step / 1e6:.1f}M steps   juggles: {info['touches']}   t = {t:4.1f}s"))
+                                f"{step / 1e6:.1f}M steps   juggles: {info['touches']}{moved}   t = {t:4.1f}s"))
         frames += [frames[-1]] * 25  # hold the last frame for 0.5 s
-        print(f"{step}: juggles={info['touches']} steps={env._steps}")
+        print(f"{step}: juggles={info['touches']} steps={env._steps}{moved}")
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     imageio.mimsave(args.out, frames, fps=env.metadata["render_fps"])
     print(f"wrote {args.out} ({len(frames) / env.metadata['render_fps']:.0f} s)")

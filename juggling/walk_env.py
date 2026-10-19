@@ -44,6 +44,8 @@ class SoccerJuggleWalkEnv(gym.Env):
         target_apex=1.05,
         ball_speed=0.3,
         alternate_bonus=0.5,
+        max_bonus_height=1.5,
+        overshoot_penalty=5.0,
         width=640,
         height=480,
     ):
@@ -56,6 +58,10 @@ class SoccerJuggleWalkEnv(gym.Env):
         self.target_apex = target_apex
         self.ball_speed = ball_speed  # max |vx| of the ball at launch (m/s)
         self.alternate_bonus = alternate_bonus
+        # anti "kick it sky-high and run under it": no airborne bonus above this
+        # height, and a penalty per metre an apex overshoots target_apex + 0.3 m
+        self.max_bonus_height = max_bonus_height
+        self.overshoot_penalty = overshoot_penalty
         self.render_mode = render_mode
         self._width, self._height = width, height
         self._renderer = None
@@ -225,7 +231,7 @@ class SoccerJuggleWalkEnv(gym.Env):
         # ---- reward ----
         reward = 0.2  # upright and still playing
         reward -= 0.5 * abs(pitch)  # keep the torso upright
-        if contact_substeps == 0:
+        if contact_substeps == 0 and ball_p[1] < self.max_bonus_height:
             gap = ball_p[1] - feet_p[nearest, 1] - BALL_RADIUS
             reward += 0.5 + 0.5 * np.clip(gap / 0.4, 0.0, 1.0)
         reward -= 0.05 * contact_substeps
@@ -242,6 +248,7 @@ class SoccerJuggleWalkEnv(gym.Env):
                 self._foot_touches[self._touch_foot] += 1
                 apex_err = ball_p[1] - self.target_apex
                 reward += 2.0 + 4.0 * np.exp(-((apex_err / 0.2) ** 2))
+                reward -= self.overshoot_penalty * max(apex_err - 0.3, 0.0)
                 if self._last_juggle_foot is not None and self._touch_foot != self._last_juggle_foot:
                     reward += self.alternate_bonus
                 self._last_juggle_foot = self._touch_foot
