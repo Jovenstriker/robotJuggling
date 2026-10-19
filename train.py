@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from stable_baselines3 import PPO, SAC
-from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 
@@ -71,10 +71,17 @@ def main():
                 self.eval_env.obs_rms = env.obs_rms
             return super()._on_step()
 
+    class SaveBestNorm(BaseCallback):
+        """Save the obs-normalization stats that go with best_model.zip."""
+        def _on_step(self):
+            env.save(str(out / "best_vecnormalize.pkl"))
+            return True
+
     callbacks = [
         CheckpointCallback(max(100_000 // n_envs, 1), str(out / "checkpoints"),
                            save_vecnormalize=True),
         SyncNorm(eval_env, best_model_save_path=str(out), log_path=str(out),
+                 callback_on_new_best=SaveBestNorm(),
                  eval_freq=max(50_000 // n_envs, 1), n_eval_episodes=5, deterministic=True),
     ]
     model.learn(total_timesteps=args.steps, callback=callbacks, progress_bar=True)

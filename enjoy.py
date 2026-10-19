@@ -23,6 +23,21 @@ from juggling import TASKS, make_env
 _OBS_DIM_TO_ENV = {25: ("static", {"legs": 1}), 47: ("static", {"legs": 2}), 33: ("walk", {})}
 
 
+def _best_norm_path(run_dir: Path) -> Path:
+    """Normalization stats matching best_model.zip (not the end of training)."""
+    if (run_dir / "best_vecnormalize.pkl").exists():
+        return run_dir / "best_vecnormalize.pkl"
+    # older runs: use the checkpoint saved closest after the best evaluation
+    evals = np.load(run_dir / "evaluations.npz")
+    best_step = int(evals["timesteps"][np.argmax(evals["results"].mean(axis=1))])
+    ckpts = sorted(
+        (int(p.stem.split("_")[-2]), p)
+        for p in (run_dir / "checkpoints").glob("rl_model_vecnormalize_*_steps.pkl")
+    )
+    after = [p for s, p in ckpts if s >= best_step]
+    return after[0] if after else run_dir / "vecnormalize.pkl"
+
+
 def load(run_dir: Path, step=None):
     """Return (policy, (task, env_kwargs)) for a run directory."""
     if step is not None:
@@ -30,9 +45,9 @@ def load(run_dir: Path, step=None):
         norm_path = run_dir / "checkpoints" / f"rl_model_vecnormalize_{step}_steps.pkl"
     else:
         model_path = run_dir / "best_model.zip"
+        norm_path = _best_norm_path(run_dir)
         if not model_path.exists():
-            model_path = run_dir / "final_model.zip"
-        norm_path = run_dir / "vecnormalize.pkl"
+            model_path, norm_path = run_dir / "final_model.zip", run_dir / "vecnormalize.pkl"
     algo = SAC if "sac" in run_dir.name else PPO
     model = algo.load(model_path, device="cpu")
     with open(norm_path, "rb") as f:
