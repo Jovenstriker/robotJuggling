@@ -4,9 +4,11 @@
     mjpython enjoy.py runs/ppo_s0                     # live viewer (macOS needs mjpython)
     python enjoy.py --random --legs 2 --record random.mp4  # random-action baseline
     python enjoy.py runs/ppo_s0 --step 1000000 --record early.mp4  # a training checkpoint
+    python enjoy.py --random --task walk --record random_walk.mp4
 """
 
 import argparse
+import json
 import pickle
 import time
 from pathlib import Path
@@ -15,11 +17,14 @@ import imageio
 import numpy as np
 from stable_baselines3 import PPO, SAC
 
-from juggling import SoccerJuggleEnv
+from juggling import TASKS, make_env
+
+# fallback for runs saved before env.json existed: identify the env by obs size
+_OBS_DIM_TO_ENV = {25: ("static", {"legs": 1}), 47: ("static", {"legs": 2}), 33: ("walk", {})}
 
 
 def load(run_dir: Path, step=None):
-    """Return (policy, legs); the leg count is inferred from the saved obs size."""
+    """Return (policy, (task, env_kwargs)) for a run directory."""
     if step is not None:
         model_path = run_dir / "checkpoints" / f"rl_model_{step}_steps.zip"
         norm_path = run_dir / "checkpoints" / f"rl_model_vecnormalize_{step}_steps.pkl"
@@ -38,8 +43,13 @@ def load(run_dir: Path, step=None):
         o = np.clip((obs - obs_rms.mean) / np.sqrt(obs_rms.var + vn.epsilon), -clip, clip)
         return model.predict(o, deterministic=True)[0]
 
-    legs = (obs_rms.mean.shape[0] - 3) // 22
-    return policy, legs
+    cfg_path = run_dir / "env.json"
+    if cfg_path.exists():
+        cfg = json.loads(cfg_path.read_text())
+        env_cfg = (cfg["task"], cfg["kwargs"])
+    else:
+        env_cfg = _OBS_DIM_TO_ENV[obs_rms.mean.shape[0]]
+    return policy, env_cfg
 
 
 def main():
@@ -49,13 +59,15 @@ def main():
     p.add_argument("--step", type=int, default=None, help="load checkpoint at this timestep")
     p.add_argument("--record", type=str, default=None, help="output .mp4 path")
     p.add_argument("--episodes", type=int, default=3)
+    p.add_argument("--task", choices=list(TASKS), default="static", help="only used with --random")
     p.add_argument("--legs", type=int, choices=[1, 2], default=1, help="only used with --random")
     args = p.parse_args()
 
-    legs = args.legs
-    if not args.random:
-        policy, legs = load(args.run_dir, args.step)
-    env = SoccerJuggleEnv(render_mode="rgb_array" if args.record else "human", legs=legs)
+    if args.random:
+        task, kwargs = args.task, ({"legs": args.legs} if args.task == "static" else {})
+    else:
+        policy, (task, kwargs) = load(args.run_dir, args.step)
+    env = make_env(task, render_mode="rgb_array" if args.record else "human", **kwargs)
     if args.random:
         policy = lambda o: env.action_space.sample()
 
@@ -71,7 +83,9 @@ def main():
                 frames.append(env.render())
             else:
                 time.sleep(env.frame_skip * env.model.opt.timestep)
-        print(f"episode {ep}: return={ret:.1f} touches={info['touches']} per-foot={info['foot_touches']} steps={env._steps}")
+        extra = f" moved={info['distance']:+.2f}m" if "distance" in info else ""
+        print(f"episode {ep}: return={ret:.1f} touches={info['touches']} "
+              f"per-foot={info['foot_touches']} steps={env._steps}{extra}")
     if args.record:
         imageio.mimsave(args.record, frames, fps=env.metadata["render_fps"])
         print(f"wrote {args.record}")

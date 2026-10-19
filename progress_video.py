@@ -11,7 +11,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from enjoy import load
-from juggling import SoccerJuggleEnv
+from juggling import make_env
 
 
 def label(frame, text):
@@ -37,9 +37,9 @@ def main():
     env = None
     frames = []
     for step in args.steps:
-        policy, legs = load(args.run_dir, step)
+        policy, (task, kwargs) = load(args.run_dir, step)
         if env is None:
-            env = SoccerJuggleEnv(render_mode="rgb_array", legs=legs)
+            env = make_env(task, render_mode="rgb_array", **kwargs)
         obs, _ = env.reset(seed=args.seed)
         done, info = False, {"touches": 0}
         while not done:
