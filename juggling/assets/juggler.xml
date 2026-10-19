@@ -1,0 +1,79 @@
+<!--
+  A fixed-base robot leg that juggles a soccer ball ("keepie-uppie").
+  The torso is welded to the world; the right leg has 5 actuated joints:
+  hip pitch / hip roll / knee / ankle pitch / ankle roll.
+  Ball: FIFA size 5 (r = 0.11 m, m = 0.43 kg), bouncy contact.
+-->
+<mujoco model="soccer_juggler">
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.6 0.6 0.6"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.20 0.45 0.20" rgb2="0.17 0.40 0.17" width="512" height="512"/>
+    <material name="grass" texture="grid" texrepeat="8 8" reflectance="0.05"/>
+    <texture name="ball_tex" type="cube" builtin="checker" rgb1="0.95 0.95 0.95" rgb2="0.1 0.1 0.1" width="64" height="64"/>
+    <material name="ball_mat" texture="ball_tex"/>
+    <material name="robot" rgba="0.75 0.78 0.82 1"/>
+    <material name="joint" rgba="0.25 0.28 0.32 1"/>
+    <material name="boot" rgba="0.85 0.25 0.15 1"/>
+  </asset>
+
+  <default>
+    <joint damping="2" armature="0.02"/>
+    <geom contype="1" conaffinity="1" friction="0.8 0.02 0.002" material="robot"/>
+    <position kp="400" forcerange="-250 250"/>
+  </default>
+
+  <worldbody>
+    <light pos="0 -1 3" dir="0 0.3 -1" directional="true"/>
+    <geom name="floor" type="plane" size="5 5 0.1" material="grass"/>
+
+    <!-- static torso + standing (left) leg, purely visual/collidable scenery -->
+    <body name="torso" pos="0 0 1.0">
+      <geom name="pelvis" type="box" size="0.08 0.18 0.06" contype="0" conaffinity="0"/>
+      <geom name="chest" type="box" size="0.10 0.16 0.20" pos="0 0 0.28" contype="0" conaffinity="0"/>
+      <geom name="stance_leg" type="capsule" fromto="0 0.10 -0.04 0 0.10 -0.95" size="0.05" contype="0" conaffinity="0"/>
+      <geom name="stance_foot" type="box" size="0.12 0.05 0.025" pos="0.05 0.10 -0.975" contype="0" conaffinity="0" material="boot"/>
+
+      <!-- kicking (right) leg -->
+      <body name="thigh" pos="0 -0.10 -0.04">
+        <joint name="hip_pitch" type="hinge" axis="0 1 0" range="-110 30"/>
+        <joint name="hip_roll" type="hinge" axis="1 0 0" range="-30 30"/>
+        <geom name="hip_cap" type="sphere" size="0.065" material="joint" contype="0" conaffinity="0"/>
+        <geom name="thigh" type="capsule" fromto="0 0 0 0 0 -0.42" size="0.055" mass="4.0"/>
+        <body name="shin" pos="0 0 -0.42">
+          <joint name="knee" type="hinge" axis="0 1 0" range="0 140"/>
+          <geom name="knee_cap" type="sphere" size="0.055" material="joint" contype="0" conaffinity="0"/>
+          <geom name="shin" type="capsule" fromto="0 0 0 0 0 -0.42" size="0.045" mass="2.0"/>
+          <body name="foot" pos="0 0 -0.45">
+            <joint name="ankle_pitch" type="hinge" axis="0 1 0" range="-30 85"/>
+            <joint name="ankle_roll" type="hinge" axis="1 0 0" range="-30 30"/>
+            <geom name="foot" type="box" size="0.13 0.055 0.025" pos="0.05 0 0" mass="0.8" material="boot"/>
+            <site name="foot_top" pos="0.05 0 0.025" size="0.01"/>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- the ball: bouncy via soft-contact solref (small damping ratio) -->
+    <body name="ball" pos="0.4 -0.1 1.2">
+      <freejoint name="ball"/>
+      <geom name="ball" type="sphere" size="0.11" mass="0.43" material="ball_mat"
+            solref="-20000 -8" solimp="0.95 0.99 0.001" friction="0.6 0.01 0.001"
+            condim="4" priority="1"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="hip_pitch"   joint="hip_pitch"   ctrlrange="-110 30"/>
+    <position name="hip_roll"    joint="hip_roll"    ctrlrange="-30 30" kp="300"/>
+    <position name="knee"        joint="knee"        ctrlrange="0 140"  kp="300"/>
+    <position name="ankle_pitch" joint="ankle_pitch" ctrlrange="-30 85" kp="100"/>
+    <position name="ankle_roll"  joint="ankle_roll"  ctrlrange="-30 30" kp="100"/>
+  </actuator>
+</mujoco>
