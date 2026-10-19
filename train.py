@@ -4,6 +4,7 @@
     python train.py --algo sac --steps 1_000_000
     python train.py --legs 2 --steps 8_000_000        # both legs actuated
     python train.py --task walk --steps 10_000_000    # free-standing, steps to follow the ball
+    python train.py --task walk --alternate --steps 15_000_000   # alternate kicking feet
     tensorboard --logdir runs
 """
 
@@ -29,10 +30,14 @@ def main():
                    help="static: fixed torso; walk: free-standing robot that moves to juggle")
     p.add_argument("--legs", type=int, choices=[1, 2], default=1,
                    help="actuated legs for --task static")
+    p.add_argument("--alternate", action="store_true",
+                   help="walk task: command which foot kicks next; curriculum to strict alternation")
     p.add_argument("--name", default=None, help="run name (default: <algo>[_2leg|_walk]_s<seed>)")
     args = p.parse_args()
 
-    if args.task == "walk":
+    if args.task == "walk" and args.alternate:
+        tag, env_kwargs = "_walk_alt", {"foot_command": True}
+    elif args.task == "walk":
         tag, env_kwargs = "_walk", {}
     else:
         tag, env_kwargs = ("_2leg" if args.legs == 2 else ""), {"legs": args.legs}
@@ -46,7 +51,8 @@ def main():
     env = make_vec_env(env_cls, n_envs=n_envs, seed=args.seed, env_kwargs=env_kwargs,
                        vec_env_cls=SubprocVecEnv)
     env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
-    eval_env = make_vec_env(env_cls, n_envs=1, seed=args.seed + 1000, env_kwargs=env_kwargs)
+    eval_env = make_vec_env(env_cls, n_envs=1, seed=args.seed + 1000,
+                            env_kwargs={**env_kwargs, **({"switch_every": 1} if args.alternate else {})})
     eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False, training=False)
 
     if args.algo == "ppo":
@@ -77,6 +83,17 @@ def main():
             env.save(str(out / "best_vecnormalize.pkl"))
             return True
 
+    class SwitchCurriculum(BaseCallback):
+        """Alternate feet every 4 juggles, then every 2, then every juggle (eval is always 1)."""
+        def _on_step(self):
+            frac = self.num_timesteps / args.steps
+            every = 4 if frac < 0.25 else 2 if frac < 0.5 else 1
+            if every != getattr(self, "_every", None):
+                self._every = every
+                env.set_attr("switch_every", every)
+                self.logger.record("curriculum/switch_every", every)
+            return True
+
     callbacks = [
         CheckpointCallback(max(100_000 // n_envs, 1), str(out / "checkpoints"),
                            save_vecnormalize=True),
@@ -84,6 +101,8 @@ def main():
                  callback_on_new_best=SaveBestNorm(),
                  eval_freq=max(50_000 // n_envs, 1), n_eval_episodes=5, deterministic=True),
     ]
+    if args.alternate:
+        callbacks.append(SwitchCurriculum())
     model.learn(total_timesteps=args.steps, callback=callbacks, progress_bar=True)
     model.save(out / "final_model")
     env.save(str(out / "vecnormalize.pkl"))

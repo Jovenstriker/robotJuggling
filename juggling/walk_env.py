@@ -13,6 +13,12 @@ Obs    (33,): torso height / pitch / velocities, joint pos & vel, ball pos & vel
               foot pitch, foot-on-ground flags.
 Episode ends when the ball drops, gets too far from the robot, the robot falls,
 or after `max_steps` control steps (20 s at 50 Hz).
+
+`foot_command=True` teaches alternating feet: the obs gains a one-hot "kick with
+this foot next" command (35 dims), only that foot's juggles are rewarded, and the
+command flips after `switch_every` correct juggles (1 = strict alternation).
+Episodes start on a random stance leg, and actions are offsets from a symmetric
+pose so both legs have the same reach. `max_wrong` wrong-foot juggles end the episode.
 """
 
 from pathlib import Path
@@ -29,6 +35,11 @@ LEG_JOINTS = ["r_hip", "r_knee", "r_ankle", "l_hip", "l_knee", "l_ankle"]
 # stand on the left leg, right foot raised and flat (same as the stationary juggler)
 HOME_DEG = np.array([-75.0, 35.0, 40.0, 0.0, 5.0, -5.0])
 ACTION_SCALE_DEG = np.array([50.0, 60.0, 45.0, 60.0, 60.0, 40.0])
+# foot_command mode: per-leg poses, and a symmetric home halfway between them
+RAISED_DEG = np.array([-75.0, 35.0, 40.0])
+STANCE_DEG = np.array([0.0, 5.0, -5.0])
+SYM_HOME_DEG = np.tile((RAISED_DEG + STANCE_DEG) / 2, 2)
+SYM_SCALE_DEG = np.tile([75.0, 70.0, 65.0], 2)
 
 
 class SoccerJuggleWalkEnv(gym.Env):
@@ -46,6 +57,10 @@ class SoccerJuggleWalkEnv(gym.Env):
         alternate_bonus=0.5,
         max_bonus_height=1.5,
         overshoot_penalty=5.0,
+        foot_command=False,
+        switch_every=1,
+        wrong_foot_penalty=3.0,
+        max_wrong=3,
         width=640,
         height=480,
     ):
@@ -62,6 +77,10 @@ class SoccerJuggleWalkEnv(gym.Env):
         # height, and a penalty per metre an apex overshoots target_apex + 0.3 m
         self.max_bonus_height = max_bonus_height
         self.overshoot_penalty = overshoot_penalty
+        self.foot_command = foot_command
+        self.switch_every = switch_every  # can be changed during training (curriculum)
+        self.wrong_foot_penalty = wrong_foot_penalty
+        self.max_wrong = max_wrong
         self.render_mode = render_mode
         self._width, self._height = width, height
         self._renderer = None
@@ -83,13 +102,15 @@ class SoccerJuggleWalkEnv(gym.Env):
         self._foot_sites = [m.site("r_foot_top").id, m.site("l_foot_top").id]
         self._foot_bodies = [m.body("r_foot").id, m.body("l_foot").id]
 
-        self._home = np.radians(HOME_DEG)
-        self._scale = np.radians(ACTION_SCALE_DEG)
+        if foot_command:
+            self._home, self._scale = np.radians(SYM_HOME_DEG), np.radians(SYM_SCALE_DEG)
+        else:
+            self._home, self._scale = np.radians(HOME_DEG), np.radians(ACTION_SCALE_DEG)
         self._ctrl_lo, self._ctrl_hi = m.actuator_ctrlrange[:, 0], m.actuator_ctrlrange[:, 1]
         self._torso_z0 = m.body_pos[self._torso_body][2]
 
         self.action_space = spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32)
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(33,), dtype=np.float64)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(35 if foot_command else 33,), dtype=np.float64)
 
     # ------------------------------------------------------------------ helpers
     def _torso(self):
@@ -152,6 +173,7 @@ class SoccerJuggleWalkEnv(gym.Env):
                 feet_pitch,
                 np.asarray(self._grounded, dtype=np.float64),
             ]
+            + ([np.eye(2)[self._command]] if self.foot_command else [])
         )
 
     # --------------------------------------------------------------------- API
@@ -159,17 +181,24 @@ class SoccerJuggleWalkEnv(gym.Env):
         super().reset(seed=seed)
         mujoco.mj_resetData(self.model, self.data)
         rng = self.np_random
-        q = self._home + rng.uniform(-0.03, 0.03, size=6)
+        # kick foot: 0 = right, 1 = left; the other leg is the stance leg
+        kick = int(rng.integers(2)) if self.foot_command else 0
+        stance = 1 - kick
+        if self.foot_command:
+            pose = np.radians(np.concatenate([RAISED_DEG, STANCE_DEG] if kick == 0 else [STANCE_DEG, RAISED_DEG]))
+        else:
+            pose = self._home
+        q = pose + rng.uniform(-0.03, 0.03, size=6)
         self.data.qpos[self._leg_qpos] = q
         self.data.ctrl[:] = q
         mujoco.mj_forward(self.model, self.data)
-        # put the standing (left) foot's sole exactly on the ground
-        sole = self.data.geom_xpos[self._foot_geoms[1]][2] - 0.025
+        # put the stance foot's sole exactly on the ground
+        sole = self.data.geom_xpos[self._foot_geoms[stance]][2] - 0.025
         self.data.qpos[self._root_qpos[1]] -= sole
         mujoco.mj_forward(self.model, self.data)
 
         # drop the ball above the raised foot, with a random horizontal speed
-        foot = self.data.site_xpos[self._foot_sites[0]]
+        foot = self.data.site_xpos[self._foot_sites[kick]]
         # where the raised foot sits relative to the torso: the robot-relative juggling spot
         self._juggle_offset = foot[0] - self._torso()[0]
         self.data.qpos[self._ball_qpos[0]] = foot[0] + rng.uniform(-0.05, 0.05) - self.model.body_pos[self._ball_body][0]
@@ -182,7 +211,10 @@ class SoccerJuggleWalkEnv(gym.Env):
         self._touches = 0
         self._foot_touches = [0, 0]
         self._was_touching = [False, False]
-        self._grounded = [False, True]
+        self._grounded = [stance == 0, stance == 1]
+        self._command = kick
+        self._streak = 0  # correct-foot juggles since the command last flipped
+        self._wrong = 0
         self._touch_z = None
         self._touch_foot = None
         self._last_juggle_foot = None
@@ -196,6 +228,8 @@ class SoccerJuggleWalkEnv(gym.Env):
             "touches": self._touches,
             "foot_touches": list(self._foot_touches),
             "distance": tx - self._start_x,
+            "wrong_foot": self._wrong,
+            "command": self._command,
         }
 
     def step(self, action):
@@ -243,7 +277,11 @@ class SoccerJuggleWalkEnv(gym.Env):
             self._touch_z = ball_p[1]
             self._touch_foot = new_touch_foot
         if self._touch_z is not None and ball_v[1] <= 0 and contact_substeps == 0:
-            if ball_p[1] - self._touch_z > MIN_JUGGLE_RISE:
+            if ball_p[1] - self._touch_z > MIN_JUGGLE_RISE and self.foot_command \
+                    and self._touch_foot != self._command:
+                reward -= self.wrong_foot_penalty  # juggled, but with the wrong foot
+                self._wrong += 1
+            elif ball_p[1] - self._touch_z > MIN_JUGGLE_RISE:
                 self._touches += 1
                 self._foot_touches[self._touch_foot] += 1
                 apex_err = ball_p[1] - self.target_apex
@@ -252,6 +290,10 @@ class SoccerJuggleWalkEnv(gym.Env):
                 if self._last_juggle_foot is not None and self._touch_foot != self._last_juggle_foot:
                     reward += self.alternate_bonus
                 self._last_juggle_foot = self._touch_foot
+                if self.foot_command:
+                    self._streak += 1
+                    if self._streak >= self.switch_every:
+                        self._command, self._streak = 1 - self._command, 0
             self._touch_z = None
         reward -= 0.05 * float(np.sum((action - self._prev_action) ** 2))
         self._prev_action = action
@@ -259,7 +301,8 @@ class SoccerJuggleWalkEnv(gym.Env):
         fell = tz < 0.6 or abs(pitch) > 0.8
         dropped = ball_p[1] < self.drop_height or floor_hit
         lost = abs(ball_p[0] - tx) > self._juggle_offset + self.max_ball_dist
-        terminated = bool(fell or dropped or lost)
+        too_many_wrong = self.foot_command and self._wrong >= self.max_wrong
+        terminated = bool(fell or dropped or lost or too_many_wrong)
         if terminated:
             reward -= 10.0
         truncated = self._steps >= self.max_steps

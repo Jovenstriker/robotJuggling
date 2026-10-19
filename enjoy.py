@@ -20,7 +20,8 @@ from stable_baselines3 import PPO, SAC
 from juggling import TASKS, make_env
 
 # fallback for runs saved before env.json existed: identify the env by obs size
-_OBS_DIM_TO_ENV = {25: ("static", {"legs": 1}), 47: ("static", {"legs": 2}), 33: ("walk", {})}
+_OBS_DIM_TO_ENV = {25: ("static", {"legs": 1}), 47: ("static", {"legs": 2}), 33: ("walk", {}),
+                   35: ("walk", {"foot_command": True})}
 
 
 def _best_norm_path(run_dir: Path) -> Path:
@@ -98,7 +99,7 @@ def main():
                 frames.append(env.render())
             else:
                 time.sleep(env.frame_skip * env.model.opt.timestep)
-        extra = f" moved={info['distance']:+.2f}m" if "distance" in info else ""
+        extra = f" moved={info['distance']:+.2f}m wrong-foot={info['wrong_foot']}" if "distance" in info else ""
         print(f"episode {ep}: return={ret:.1f} touches={info['touches']} "
               f"per-foot={info['foot_touches']} steps={env._steps}{extra}")
     if args.record:
