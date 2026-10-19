@@ -2,6 +2,7 @@
 
     python train.py --algo ppo --steps 5_000_000
     python train.py --algo sac --steps 1_000_000
+    python train.py --legs 2 --steps 8_000_000        # both legs actuated
     tensorboard --logdir runs
 """
 
@@ -22,17 +23,20 @@ def main():
     p.add_argument("--steps", type=int, default=5_000_000)
     p.add_argument("--n-envs", type=int, default=8)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--name", default=None, help="run name (default: <algo>_s<seed>)")
+    p.add_argument("--legs", type=int, choices=[1, 2], default=1, help="number of actuated legs")
+    p.add_argument("--name", default=None, help="run name (default: <algo>[_2leg]_s<seed>)")
     args = p.parse_args()
 
-    name = args.name or f"{args.algo}_s{args.seed}"
+    name = args.name or f"{args.algo}{'_2leg' if args.legs == 2 else ''}_s{args.seed}"
+    env_kwargs = {"legs": args.legs}
     out = Path("runs") / name
     out.mkdir(parents=True, exist_ok=True)
 
     n_envs = args.n_envs if args.algo == "ppo" else max(1, args.n_envs // 2)
-    env = make_vec_env(SoccerJuggleEnv, n_envs=n_envs, seed=args.seed, vec_env_cls=SubprocVecEnv)
+    env = make_vec_env(SoccerJuggleEnv, n_envs=n_envs, seed=args.seed, env_kwargs=env_kwargs,
+                       vec_env_cls=SubprocVecEnv)
     env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
-    eval_env = make_vec_env(SoccerJuggleEnv, n_envs=1, seed=args.seed + 1000)
+    eval_env = make_vec_env(SoccerJuggleEnv, n_envs=1, seed=args.seed + 1000, env_kwargs=env_kwargs)
     eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False, training=False)
 
     if args.algo == "ppo":
